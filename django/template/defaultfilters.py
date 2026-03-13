@@ -667,7 +667,7 @@ def slice_filter(value, arg):
 
 
 @register.filter(is_safe=True, needs_autoescape=True)
-def unordered_list(value, autoescape=True):
+def unordered_list(value, autoescape=True, max_items: int | None = None):
     """
     Recursively take a self-nested list and return an HTML unordered list --
     WITHOUT opening and closing <ul> tags.
@@ -719,9 +719,10 @@ def unordered_list(value, autoescape=True):
         except StopIteration:
             pass
 
-    def list_formatter(item_list, tabs=1):
+    def list_formatter(item_list, tabs=1, max_items=max_items):
         indent = "\t" * tabs
         output = []
+        truncated_count = 0
         for item, children in walk_items(item_list):
             sublist = ""
             if children:
@@ -731,10 +732,23 @@ def unordered_list(value, autoescape=True):
                     indent,
                     indent,
                 )
-            output.append("%s<li>%s%s</li>" % (indent, escaper(item), sublist))
+
+            if max_items is not None and len(output) >= max_items:
+                truncated_count += 1
+            else:
+                output.append("%s<li>%s%s</li>" % (indent, escaper(item), sublist))
+
+        if truncated_count > 0:
+            msg = ngettext(
+                "\u2026and %(count)d more.",
+                "\u2026and %(count)d more.",
+                truncated_count,
+            ) % {"count": truncated_count}
+            output.append("%s<li>%s</li>" % (indent, msg))
+
         return "\n".join(output)
 
-    return mark_safe(list_formatter(value))
+    return mark_safe(list_formatter(value, max_items=max_items))
 
 
 ###################
