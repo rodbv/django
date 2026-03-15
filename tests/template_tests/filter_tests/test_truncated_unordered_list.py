@@ -1,4 +1,4 @@
-from django.contrib.admin.templatetags.admin_filters import truncated_unordered_list
+from django.template.defaultfilters import truncated_unordered_list
 from django.test import SimpleTestCase
 
 

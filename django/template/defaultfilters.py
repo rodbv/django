@@ -751,6 +751,23 @@ def unordered_list(value, autoescape=True, max_items: int | None = None):
     return mark_safe(list_formatter(value, max_items=max_items))
 
 
+@register.filter(is_safe=True, needs_autoescape=True)
+def truncated_unordered_list(value, max_items, autoescape=True):
+    """
+    Render an unordered list, showing at most ``max_items`` items and a
+    "...and N more." item at the end.
+
+    Usage::
+
+        {{ deleted_objects|truncated_unordered_list:100 }}
+    """
+    try:
+        max_items = int(max_items)
+    except (TypeError, ValueError):
+        return unordered_list(value, autoescape=autoescape)
+    return unordered_list(value, autoescape=autoescape, max_items=max_items)
+
+
 ###################
 # INTEGERS        #
 ###################
