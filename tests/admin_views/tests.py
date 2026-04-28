@@ -3,6 +3,7 @@ import os
 import re
 import sys
 import unittest
+import warnings
 import zoneinfo
 from http import HTTPStatus
 from unittest import mock
@@ -41,6 +42,7 @@ from django.test.utils import override_script_prefix
 from django.urls import NoReverseMatch, resolve, reverse
 from django.utils import formats, translation
 from django.utils.cache import get_max_age
+from django.utils.deprecation import RemovedInDjango70Warning
 from django.utils.encoding import iri_to_uri
 from django.utils.html import escape
 from django.utils.http import urlencode
@@ -190,6 +192,26 @@ class AdminFieldExtractionMixin:
         for field in admin_readonly_fields:
             if field.field["name"] == field_name:
                 return field
+
+
+class LegacyReadonlyWidget(forms.TextInput):
+    read_only = True
+
+    def render(self, name, value, attrs=None, renderer=None):
+        return "legacy readonly output"
+
+
+class LegacyReadonlyWidgetFalse(forms.TextInput):
+    read_only = False
+
+    def render(self, name, value, attrs=None, renderer=None):
+        return "should not be used"
+
+
+class LegacyReadonlyWidgetError(forms.TextInput):
+    @property
+    def read_only(self):
+        raise NotImplementedError
 
 
 @override_settings(ROOT_URLCONF="admin_views.urls", USE_I18N=True, LANGUAGE_CODE="en")
@@ -7864,6 +7886,91 @@ class ReadonlyTest(AdminFieldExtractionMixin, TestCase):
         with self.settings(LANGUAGE_CODE="fr"):
             response = self.client.get(url)
         self.assertContains(response, "<label>Toppings\u00a0:</label>", html=True)
+
+    def test_admin_readonly_field_uses_widget_with_legacy_read_only(self):
+        post = Post.objects.create(title="Post title", content="content")
+        form = forms.modelform_factory(
+            Post,
+            fields=["title"],
+            widgets={"title": LegacyReadonlyWidget},
+        )(instance=post)
+        field = admin.helpers.AdminReadonlyField(
+            form,
+            "title",
+            is_first=True,
+            model_admin=site._registry[Post],
+        )
+
+        msg = (
+            "Relying on the undocumented read_only attribute for custom "
+            "widget rendering in the admin is deprecated and will be "
+            "removed in Django 7.0."
+        )
+        with self.assertWarnsMessage(RemovedInDjango70Warning, msg):
+            self.assertEqual(field.contents(), "legacy readonly output")
+
+    def test_admin_readonly_field_ignores_false_read_only(self):
+        post = Post.objects.create(title="Post title", content="content")
+        form = forms.modelform_factory(
+            Post,
+            fields=["title"],
+            widgets={"title": LegacyReadonlyWidgetFalse},
+        )(instance=post)
+        field = admin.helpers.AdminReadonlyField(
+            form,
+            "title",
+            is_first=True,
+            model_admin=site._registry[Post],
+        )
+
+        with warnings.catch_warnings(record=True) as warned:
+            warnings.simplefilter("always")
+            self.assertEqual(field.contents(), "Post title")
+        self.assertIs(
+            any(isinstance(w.message, RemovedInDjango70Warning) for w in warned),
+            False,
+        )
+
+    def test_admin_readonly_field_handles_read_only_attribute_errors(self):
+        post = Post.objects.create(title="Post title", content="content")
+        form = forms.modelform_factory(
+            Post,
+            fields=["title"],
+            widgets={"title": LegacyReadonlyWidgetError},
+        )(instance=post)
+        field = admin.helpers.AdminReadonlyField(
+            form,
+            "title",
+            is_first=True,
+            model_admin=site._registry[Post],
+        )
+
+        self.assertEqual(field.contents(), "Post title")
+
+    def test_admin_change_view_uses_legacy_read_only_widget_fallback(self):
+        post = Post.objects.create(title="Post title", content="content")
+        url = reverse("namespaced_admin:admin_views_post_change", args=(post.pk,))
+        msg = (
+            "Relying on the undocumented read_only attribute for custom "
+            "widget rendering in the admin is deprecated and will be "
+            "removed in Django 7.0."
+        )
+        with self.assertWarnsMessage(RemovedInDjango70Warning, msg):
+            response = self.client.get(url)
+        self.assertContains(response, "legacy readonly output from admin view")
+
+    def test_admin_change_view_handles_read_only_attribute_errors(self):
+        post = FieldOverridePost.objects.create(title="Post title", content="content")
+        url = reverse(
+            "namespaced_admin:admin_views_fieldoverridepost_change", args=(post.pk,)
+        )
+        with warnings.catch_warnings(record=True) as warned:
+            warnings.simplefilter("always")
+            response = self.client.get(url)
+        self.assertContains(response, "Post title")
+        self.assertFalse(
+            any(isinstance(w.message, RemovedInDjango70Warning) for w in warned)
+        )
 
 
 @override_settings(ROOT_URLCONF="admin_views.urls")
