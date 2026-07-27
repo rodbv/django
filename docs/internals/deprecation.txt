@@ -18,6 +18,10 @@ details on these changes.
 * The ``django.utils.deprecation.MiddlewareMixin`` import path will be removed.
   Use ``django.middleware.MiddlewareMixin`` instead.
 
+* Support for the undocumented ``read_only`` widget attribute in the admin's
+  read-only field rendering will be removed. Use
+  ``ModelAdmin.readonly_formfield_overrides`` instead.
+
 * The ``safe`` parameter of :class:`~django.http.JsonResponse` will be removed.
 
 * Calling ``QuerySet.aiterator()`` after ``prefetch_related()`` without

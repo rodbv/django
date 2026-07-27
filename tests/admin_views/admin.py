@@ -734,6 +734,32 @@ class ReadonlyOverridePostAdmin(admin.ModelAdmin):
     }
 
 
+class LegacyReadonlyWidget(forms.TextInput):
+    read_only = True
+
+    def render(self, name, value, attrs=None, renderer=None):
+        return "legacy readonly output from admin view"
+
+
+class LegacyReadonlyPostForm(forms.ModelForm):
+    class Meta:
+        model = Post
+        fields = ["title", "content"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["title"] = forms.CharField(
+            required=False,
+            widget=LegacyReadonlyWidget,
+            initial=self.instance.title,
+        )
+
+
+class LegacyReadonlyPostAdmin(admin.ModelAdmin):
+    form = LegacyReadonlyPostForm
+    readonly_fields = ("title",)
+
+
 class CustomChangeList(ChangeList):
     def get_queryset(self, request):
         return self.root_queryset.order_by("pk").filter(pk=9999)  # Doesn't exist
@@ -1474,6 +1500,7 @@ site2.register(Post, ReadonlyOverridePostAdmin)
 
 site7 = admin.AdminSite(name="admin7")
 site7.register(Article, ArticleAdmin2)
+site7.register(Post, LegacyReadonlyPostAdmin)
 site7.register(Section)
 site7.register(ParentWithUUIDPK, ParentWithUUIDPKNoAddAdmin)
 
