@@ -37,7 +37,8 @@ Minor features
 :mod:`django.contrib.admin`
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-* ...
+* The new :attr:`.ModelAdmin.readonly_formfield_overrides` attribute allows
+  customizing the widget used to render read-only fields.
 
 :mod:`django.contrib.admindocs`
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -317,6 +318,11 @@ Miscellaneous
 
 * The ``safe`` parameter is deprecated from :class:`~django.http.JsonResponse`.
   Omitting the argument is equivalent to the prior ``safe=False`` usage.
+
+* Widgets with a ``read_only`` attribute set to ``True`` are again rendered
+  via their ``render()`` method for read-only admin fields, restoring the
+  behavior removed in Django 6.0. This undocumented workaround is deprecated:
+  use :attr:`.ModelAdmin.readonly_formfield_overrides` instead.
 
 * Calling :meth:`.QuerySet.aiterator` after ``prefetch_related()`` without
   providing a ``chunk_size`` is deprecated. It currently falls back to a

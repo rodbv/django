@@ -3,6 +3,7 @@ import os
 import re
 import sys
 import unittest
+import warnings
 import zoneinfo
 from http import HTTPStatus
 from unittest import mock
@@ -41,6 +42,7 @@ from django.test.utils import override_script_prefix
 from django.urls import NoReverseMatch, resolve, reverse
 from django.utils import formats, translation
 from django.utils.cache import get_max_age
+from django.utils.deprecation import RemovedInDjango71Warning
 from django.utils.encoding import iri_to_uri
 from django.utils.html import escape
 from django.utils.http import urlencode
@@ -190,6 +192,20 @@ class AdminFieldExtractionMixin:
         for field in admin_readonly_fields:
             if field.field["name"] == field_name:
                 return field
+
+
+class LegacyReadonlyWidget(forms.TextInput):
+    read_only = True
+
+    def render(self, name, value, attrs=None, renderer=None):
+        return "legacy readonly output"
+
+
+class LegacyReadonlyWidgetFalse(forms.TextInput):
+    read_only = False
+
+    def render(self, name, value, attrs=None, renderer=None):
+        return "should not be used"
 
 
 @override_settings(ROOT_URLCONF="admin_views.urls", USE_I18N=True, LANGUAGE_CODE="en")
@@ -7951,6 +7967,171 @@ class ReadonlyTest(AdminFieldExtractionMixin, TestCase):
         with self.settings(LANGUAGE_CODE="fr"):
             response = self.client.get(url)
         self.assertContains(response, "<label>Toppings\u00a0:</label>", html=True)
+
+    def test_admin_readonly_field_uses_widget_with_legacy_read_only(self):
+        post = Post.objects.create(title="Post title", content="content")
+        form = forms.modelform_factory(
+            Post,
+            fields=["title"],
+            widgets={"title": LegacyReadonlyWidget},
+        )(instance=post)
+        field = admin.helpers.AdminReadonlyField(
+            form,
+            "title",
+            is_first=True,
+            model_admin=site._registry[Post],
+        )
+
+        msg = (
+            "Relying on the undocumented read_only attribute for custom "
+            "widget rendering in the admin is deprecated and will be "
+            "removed in Django 7.1. Use "
+            "ModelAdmin.readonly_formfield_overrides instead."
+        )
+        with self.assertWarnsMessage(RemovedInDjango71Warning, msg):
+            self.assertEqual(field.contents(), "legacy readonly output")
+
+    def test_admin_readonly_field_ignores_false_read_only(self):
+        post = Post.objects.create(title="Post title", content="content")
+        form = forms.modelform_factory(
+            Post,
+            fields=["title"],
+            widgets={"title": LegacyReadonlyWidgetFalse},
+        )(instance=post)
+        field = admin.helpers.AdminReadonlyField(
+            form,
+            "title",
+            is_first=True,
+            model_admin=site._registry[Post],
+        )
+
+        with warnings.catch_warnings(record=True) as warned:
+            warnings.simplefilter("always")
+            self.assertEqual(field.contents(), "Post title")
+        self.assertIs(
+            any(isinstance(w.message, RemovedInDjango71Warning) for w in warned),
+            False,
+        )
+
+    def test_admin_change_view_uses_legacy_read_only_widget_fallback(self):
+        post = Post.objects.create(title="Post title", content="content")
+        url = reverse("admin7:admin_views_post_change", args=(post.pk,))
+        msg = (
+            "Relying on the undocumented read_only attribute for custom "
+            "widget rendering in the admin is deprecated and will be "
+            "removed in Django 7.1. Use "
+            "ModelAdmin.readonly_formfield_overrides instead."
+        )
+        with self.assertWarnsMessage(RemovedInDjango71Warning, msg):
+            response = self.client.get(url)
+        self.assertContains(response, "legacy readonly output from admin view")
+
+
+@override_settings(ROOT_URLCONF="admin_views.urls")
+class ReadonlyFormfieldOverridesTest(TestCase):
+    """
+    ModelAdmin.readonly_formfield_overrides customizes the rendering of
+    read-only field values (#30577).
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.superuser = User.objects.create_superuser(
+            username="super", password="secret", email="super@example.com"
+        )
+        cls.viewuser = User.objects.create_user(
+            username="viewuser", password="secret", is_staff=True
+        )
+        cls.viewuser.user_permissions.add(get_perm(Post, "view_post"))
+        cls.post = Post.objects.create(
+            title="Overridden title",
+            content="Overridden content",
+            readonly_content="Readonly content",
+        )
+        cls.url = reverse(
+            "namespaced_admin:admin_views_post_change", args=(cls.post.pk,)
+        )
+
+    def test_override_applies_to_view_only_user(self):
+        """
+        For a user without change permission, every field renders read-only
+        and overridden fields use the configured widget.
+        """
+        self.client.force_login(self.viewuser)
+        response = self.client.get(self.url)
+        self.assertContains(
+            response,
+            '<span class="readonly-override">Overridden title</span>',
+            html=True,
+        )
+        self.assertContains(
+            response,
+            '<span class="readonly-override">Overridden content</span>',
+            html=True,
+        )
+        self.assertNotContains(
+            response,
+            '<div class="readonly">Overridden content</div>',
+            html=True,
+        )
+
+    def test_override_applies_to_readonly_fields(self):
+        """
+        Fields listed in readonly_fields use the configured widget even for
+        users with change permission.
+        """
+        self.client.force_login(self.superuser)
+        response = self.client.get(self.url)
+        self.assertContains(
+            response,
+            '<span class="readonly-override">Overridden content</span>',
+            html=True,
+        )
+        self.assertNotContains(
+            response,
+            '<div class="readonly">Overridden content</div>',
+            html=True,
+        )
+
+    def test_readonly_field_without_override_is_unchanged(self):
+        """A read-only field with no override keeps the default rendering."""
+        self.client.force_login(self.superuser)
+        response = self.client.get(self.url)
+        self.assertContains(
+            response,
+            '<div class="readonly">%s</div>' % formats.localize(self.post.posted),
+            html=True,
+        )
+
+    def test_override_widget_output_is_escaped(self):
+        hostile = Post.objects.create(
+            title="Hostile",
+            content="<script>alert('boom')</script>",
+            readonly_content="rc",
+        )
+        self.client.force_login(self.superuser)
+        response = self.client.get(
+            reverse("namespaced_admin:admin_views_post_change", args=(hostile.pk,))
+        )
+        self.assertContains(
+            response,
+            "&lt;script&gt;alert(&#x27;boom&#x27;)&lt;/script&gt;",
+        )
+        self.assertNotContains(response, "<script>alert('boom')</script>")
+
+    def test_override_has_no_effect_on_editable_fields(self):
+        """
+        An override entry for a field rendered as editable doesn't affect
+        the regular form widget.
+        """
+        self.client.force_login(self.superuser)
+        response = self.client.get(self.url)
+        self.assertContains(response, 'name="title"')
+        self.assertNotContains(
+            response,
+            '<span class="readonly-override">Overridden title</span>',
+            html=True,
+        )
 
 
 @override_settings(ROOT_URLCONF="admin_views.urls")
